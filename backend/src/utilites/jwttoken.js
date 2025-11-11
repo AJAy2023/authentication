@@ -17,9 +17,6 @@ function token(user) {
 }
 
 
-
-
-
 module.exports={
   token, 
   refreshToken

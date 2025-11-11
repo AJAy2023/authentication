@@ -2,16 +2,25 @@ const User = require("../models/user");
 const bcrypt = require("bcrypt");
 const validator = require("email-validator");
 const jwt = require("jsonwebtoken");
-const {token , refreshToken} = require("../utilites/jwttoken");
+const cookie =  require("cookie-parser");
+const {token , refreshToken} =  require("../utilites/jwttoken");
 const verifyEmail = require("../verifyOtp/nodemailer");
 const Otp = require("../models/otp");
-
+const { default: mongoose } = require("mongoose");
 require("dotenv").config({ path: (__dirname, "../.env") });
 
-const register = async (req, res) => {
 
+const register = async (req, res) => {
     try {
         const { username, email, password } = req.body;
+
+          // validation 
+        if (!username || !email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: "All fields are required."
+            });
+        }
 
         // validate the  email  
         if (!validator.validate(email)) {
@@ -21,13 +30,7 @@ const register = async (req, res) => {
             });
         }
 
-        // validation 
-        if (!username || !email || !password) {
-            return res.status(400).json({
-                success: false,
-                message: "fill all the  Fields.."
-            });
-        }
+      
 
         // check the  user exist or not  
         const existUser = await User.findOne({ email });
@@ -93,75 +96,107 @@ const register = async (req, res) => {
     }
 }
 
-const verifyOtp = async (req, res) => {
-  try {
-    const { userId, enterotp } = req.body;
-    // Check if user exists
-    const userexist = await User.findOne({_id:userId});
 
-    if (!userexist) {
-      return res.status(404).json({
-        success: false,
-        message: "User not found"
-      });
-    }
+// function 
+const verifyOtp =  async (req, res)=>{
+  try{
+// take info 
+  const {userId ,  otp} =  req.body;
 
-    // Check OTP from otp collection  
-    const otpcheck = await Otp.findOne({userId:userexist});
-
-    if (!otpcheck) {
-      return res.status(404).json({
-        success: false,
-        message: "OTP not found"
-      });
-    }
-    // Compare OTPs (trim spaces)
-    if (otpcheck.otp !== enterotp) {
-      return res.status(401).json({
-        success: false,
-        message: "Invalid OTP"
-      });
-    }
-
-
-    // Check if OTP expired
-    if (otpcheck.expireAt < new Date()) {
-      return res.status(400).json({
-        success: false,
-        message: "OTP has expired"
-      });
-    }
-
-    // Mark user as verified
-       userexist.isVerified = true;
-      await userexist.save();
-
-    // Delete OTP after successful verification
-    await Otp.findOneAndDelete({ userId: userexist});
-
-    // Generate JWT token
-   
-    const usertoken  = token(userexist);
-
-    console.log("the  usetoken : ",  usertoken); //  undfine 
-   
-
-    return res.status(201).json({
-      success: true,
-      message: "OTP verified successfully",
-      data: userexist,
-      usertoken
-    
-    });
-
-  } catch (err) {
-    return res.status(500).json({
-      success: false,
-      message: "Internal server error",
-      error: err.message
+  if(!mongoose.Types.ObjectId.isValid(userId))
+  {
+    return res.status(400).json({
+      success:false,
+      message:"Invalid id"
     });
   }
-};
+// validator 
+    if(!userId || !otp)
+    {
+      return res.status(400).json({
+        success:false,
+        message:"All Field required."
+      });
+    }
+
+    const user  =  await User.findById(userId);
+    if(!user)
+    {
+      return res.status(404).json({
+        success:false,
+        message:"User not found"
+      });
+    }
+
+    //otprecord
+
+    const otprecord = await Otp.findOne({userId:user});
+    // if not otp
+    if(!otprecord)
+    {
+      return res.status(404).json({
+        success:false,
+        message:"Otp is not found."
+      });
+    }
+//otp expires 
+    if(otprecord.expireAt < Date.now())
+    {
+      return res.status(401).json({
+        success:false,
+        message:"Otp has  expired"
+      });
+    }
+
+
+//otp check with enter  otp 
+if(otprecord.otp !== otp)
+{
+  return res.status(401).json({
+    success:false,
+    message:"otp not matched"
+  });
+}
+
+// make user  verified and  login true
+
+    user.isLoggedin =  true,
+    user.isVerified =  true
+     await user.save();
+
+// access token  and refresh token 
+
+  let accessTokenvalue =  token(user);
+  let refreshtokenvalue  = refreshToken(user);
+// save the access token and  refresh Token 
+  user.tokens = [accessTokenvalue],
+  user.refreshToken = refreshtokenvalue
+
+//delete used otp 
+ await  Otp.findByIdAndDelete(userId);
+   await user.save();
+
+   res.cookie("refhreshToken", refreshtokenvalue ,{
+    httpOnly:true,
+    secure:true,
+   })
+
+   return res.status(200).json({
+    success:false,
+    message:"Otp verified successfully",
+    accessTokenvalue,
+    refreshToken:refreshtokenvalue
+   });
+
+  }catch(err)
+  {
+    return res.status(500).json({
+      success:true,
+      message:"Internal server error",
+      error:err.message
+    });
+  }
+}
 
 
 // login  
@@ -169,7 +204,7 @@ const verifyOtp = async (req, res) => {
 const login  = async (req, res)=>{
 
   try{
-    const {email ,  password}= req.body;
+    const {email , password}= req.body;
 
     // check the  email 
 
@@ -215,180 +250,306 @@ const login  = async (req, res)=>{
 
     // here accesToken and refreshToken  
 
-      let accesToken = token(user)
-      let refreshToken = refreshToken(user);
+    const accessToken = token(user);
+    const refreshTokenValue = refreshToken(user);
 
-      user.isLoggedin =  true,
-      user.isVerified =  true,
-      user.refreshToken = true
+        user.isLoggedin = true;
+        user.refreshToken = refreshTokenValue;
         await user.save();
 
 
-      return res.status(201).json({
-        success:true,
-        message:"user  logged in  successfully",
-        accesToken,
-        refreshToken
+
+         //  send  the  refresh  token wiva  cookie
+
+     res.cookie("refreshToken", refreshTokenValue, {
+        httpOnly: true,
+        secure: true, 
+        sameSite: "strict",
+        maxAge: 7 * 24 * 60 * 60 * 1000
       });
+
+
+      return res.status(201).json({
+      success: true,
+      message: "User logged in successfully",
+      accessToken,
+      refreshToken: refreshTokenValue
+    });
+
 
   }catch(err)
   {
     return res.status(500).json({
       success:false,
       message:"internal server error",
-      error:err.message
+      error:err.message,
+      
     })
   }
 }
 
 
 
-// logout  
+// refresh  token  
 
-const logout  =async (req, res)=>{
+const verifytoken  = async (req, res)=>{
 
-  try
+  try{
+    //  token from cookies 
+  const refreshtoken  =  req.cookies?.refreshToken || req.headers["x-refresh-token"];
+   // check the  token 
+    if(!refreshtoken)
+    {
+      return res.status(401).json({
+        success:false,
+        message:"Unauthorized access. Please login again."
+      });
+    }
+  // Verify the token signature
+  const decode = jwt.verify(refreshtoken , process.env.REFRESH_TOKEN );
+  if(!decode)
   {
-  // here if i click on logout then i remove from is logeed in and  remove the  token  
-
-  const { userId } = req.params;
-
-  console.log("the user paraid  : ",  userId);
-  // find user  
-
-  const checkuser  = await  User.findById(userId);
-  if(!checkuser)
-  {
-    return res.status(404).json({
+    return res.status(401).json({
       success:false,
-      message:"user not  found  "
+      message:"refresh token is  invalid"
     });
   }
 
-  // is  user there  then next  
+  //Find the user
+const user  =  await User.findById(decode.id);
+if(!user)
+{
+  return res.status(404).json({
+    success:false,
+    message:"user not found"
+  });
+}
 
-   checkuser.tokens = null,
-    checkuser.isLoggedin = false,
-     await  checkuser.save();
+  //Ensure this refresh token actually belongs to the user
+  if(!user.refreshToken ||!user.refreshToken.includes(refreshtoken))
+    {
+      return res.status(403).json({
+        success:false,
+        message:"Refresh token not found or already used. Please login again."
+      });
+    }
 
-     return res.status(201).json({
-      success:"successfully  logout",
-      data:checkuser
-     })
+  // Generate new access token
+    const  accessTokenvalue =  token(user);
+    return res.status(200).json({
+      success:true,
+      message:"refresh token created successfully",
+      accessTokenvalue
+    });
+
 
   }catch(err)
   {
     return res.status(500).json({
       success:false,
-      message:"internal server  error"
+      message:"Internal Server error",
+      error:err.message
     });
   }
+}
+
+
+// logout  
+
+const logout =  async (req, res)=>{
+
+ try{
+
+  const refershtoken = req.cookies?.refreshToken || req.headers["x-refresh-token"];
+  if(!refershtoken)
+  {
+    return res.status(401).json({
+      message:"refresh token  is not found ."
+    });
+  }
+
+
+  // verify token 
+
+  const decode  =  jwt.verify(refershtoken , process.env.REFRESH_TOKEN);
+  console.log("the decode refresh token :" , decode);
+  console.log("the  user rf token :", decode.id);
+
+  if(!decode.id)
+  {
+    return res.status(401).json({
+      success :false,
+      message:"Invalid  refreh token."
+    });
+  }
+
+const user  =  await User.findById(decode.id);
+if(!user)
+{
+  return res.status(404).json({
+    success:false,
+    message:"user not  found"
+  });
+}
+
+user.refreshToken = "",
+user.tokens = [];
+user.isLoggedin = false;
+await user.save();
+
+res.clearCookie("token");
+res.clearCookie("refreshtoken", {
+      httpOnly: true,
+      sameSite: "strict",
+    });
+  return res.status(200).json({
+      success: true,
+      message: "Logged out successfully.",
+    });
+ }catch(err)
+ {
+   console.error("Logout error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error.",
+      error: err.message,
+     })
+
+}
 }
 
 
 // resend the otp 
 
+const resendotp = async (req, res) => {
+  try {
+    const { userId } =  req.params;
 
-
-const resendotp =  async (req, res)=>{
-
-  try{
-
-    const {userId} =  req.params;
-
-// check the  user  valid or not  
-
-const  userexist  = await User.findById(userId);
-
-if(!userexist)
-{
-  return res.status(404).json({
-    success:false,
-    message:"user  not found"
-  });
-}
-// check the  otp is  exist or not in db if yes then delete it  
-
-const checkotp  = await Otp.findByIdAndDelete({userId:userId._id});
-if(!checkotp)
-{
-  return res.status(404).json({
-    success:false,
-    message:"otp not  found"
-  });
-}
-
-//  if every thing is  okay then return the  otp again 
-
-let   generatedOtp = Math.floor(10000 + Math.random() * 900000)
-
-  await  Otp.create({
-    userId:userexist._id,
-     otp:generatedOtp
-  })
-
-   await verifyEmail(generatedOtp , email)
-
-    return res.status(201).json({
-      success:true,
-      message:"otp resent again  please check the mailBox..! "
-    })
-
-  }catch(err)
-  {
-      return res.status(500).json({
-        success:false,
-        message:"internal server error ",
-        error:err.message
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(401).json({
+        success: false,
+        message: "Invalid user id",
       });
+    }
+
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: "User not found",
+      });
+    }
+
+    const existingOtp = await Otp.findOne({ userId });
+    if (existingOtp) {
+      const timeSinceLastOtp = Date.now() - existingOtp.createdAt;
+
+    if (timeSinceLastOtp < 2 * 60 * 1000) {
+      const timeLeft = Math.ceil((2 * 60 * 1000 - timeSinceLastOtp) / 1000);
+      return res.status(429).json({
+        success: false,
+        message: `Please wait ${timeLeft} seconds before requesting another OTP.`,
+      });
+    }
+    }
+
+   
+
+    await Otp.findOneAndDelete({ userId });
+
+    const generatedOtp = Math.floor(100000 + Math.random() * 900000);
+
+    await Otp.create({
+      userId,
+      otp: generatedOtp,
+    });
+
+    await verifyEmail(generatedOtp, user.email);
+
+    return res.status(200).json({
+      success: true,
+      message: "Otp resent successfully.",
+    });
+  } catch (err) {
+    return res.status(500).json({
+      success: false,
+      message: "Internal server error",
+      error: err.message,
+    });
   }
-}
+};
 
 
 
-// forget pass  
 
-const forgetpass =  async (req, res)=>{
+
+
+// resetpass pass  
+
+const resetpass =  async(req, res)=>{
+
   try{
-    const {email} =  req.body;
 
-// check the  user  
+    const {email} = req.body;
+  const{password  , confirmpassword} = req.body;
 
-const userfind = await  User.findOne({email});
-if(!userfind)
-{
-   return res.status(404).json({
-    success:false,
-    message:"internal server error"
-   });
-}
+  // validate email  
+  if(!validator.validate(email))
+  {
+    return res.status(400).json({
+      success:false,
+      message:"Invalid email address. Please check  your  emailId "
+    });
+  }
 
-// allow  user to write the  pass  
-const {password} =  req.body;
+  // required fields 
+  if(!email || !password || !confirmpassword)
+  {
+    return res.status(400).json({
+      success:false,
+      message:"All fields are required"
+    });
+  }
 
-// hash the  pass
+  // check  user  
+  const user  = await User.findOne({email});
+  if(!user)
+  {
+    return res.status(404).json({
+      success:false,
+      message:"User not  found"
+    });
+  }
 
-const hashpass = await bcrypt.hash(password , 10);
-if(!hashpass)
-{
-  return res.status(400).json({
-    success:false,
-    message:"unathorized access"
-  });
-}
+  // check the pssowrds 
+  if(password  !== confirmpassword)
+  {
+    return res.status(401).json({
+      success:false,
+      message:"Missmatch password"
+    });
+  }
 
-//  reconfrom the  pass  
-const isMatch = await bcrypt.compare(password , userfind.password);
+  const hashpass =  await  bcrypt.hash(password,  10);
+   user.password = hashpass
+   await user.save();
+
+     return res.status(200).json({
+      success: true,
+      message: "Password reset successfully",
+    });
 
   }catch(err)
   {
     return res.status(500).json({
       success:false,
-      message:"Internal server error"
+      message:"Internal error",
+      error:err.message
     });
   }
+
 }
 
 
 
-module.exports = { register, verifyOtp , login, logout ,  resendotp};
+module.exports = { register, verifyOtp , login, logout ,  resendotp, verifytoken , resetpass};
