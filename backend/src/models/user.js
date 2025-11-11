@@ -22,15 +22,21 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    otp: String,
-    otpExpiry: Date,
+    
     tokens: {
       type: [String],
-      default: [],
+      default:[],
     },
-    refreshToken: String,
-    resetPasswordToken: String,
-    resetPasswordExpire: Date,
+
+    isLoggedin:{
+      type:Boolean,
+      default:false,
+    },
+    refreshToken:{
+      type: String,
+      default:""
+    },
+
   },
   { timestamps: true }
 );

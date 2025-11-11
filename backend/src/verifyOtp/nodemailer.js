@@ -13,6 +13,8 @@ const transport = nodemailer.createTransport({
 });
 
 
+
+
 const mailconfiguration  = {
   from:process.env.SMTP_USER,
   to :email,
